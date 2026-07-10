@@ -1,0 +1,35 @@
+# Metadata types the automated pipeline should NEVER touch, even in "full" mode.
+# One metadata type name per line (must match the <name> tag used in package.xml).
+# Lines starting with # are comments.
+
+Profile
+PermissionSet
+SharingRules
+Role
+Group
+CustomPermission
+NamedCredential
+AuthProvider
+ConnectedApp
+RemoteSiteSetting
+SecuritySettings
+Settings
+
+# --- Discovered via actual deploy attempt: standard objects that only exist
+# --- because a license/feature (Field Service, Portal, Loyalty/Consumer Goods,
+# --- Channel Programs) is enabled in source org but not in this target.
+# --- These are not real custom objects and can't be deployed as CustomObject
+# --- metadata into an org where the underlying feature isn't enabled.
+CustomObject:AccountBrand
+CustomObject:Address
+CustomObject:AgentWork
+CustomObject:AppointmentCategory
+CustomObject:AppointmentInvitation
+Layout:AccountBrand-Account Brand Layout
+
+# Standard fields on Account gated by the same missing features
+CustomField:Account.ChannelProgramLevelName
+CustomField:Account.ChannelProgramName
+CustomField:Account.IsCustomerPortal
+CustomField:Account.IsPartner
+CustomField:Account.OperatingHoursId

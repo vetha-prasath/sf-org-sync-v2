@@ -1,0 +1,154 @@
+name: SF Pull - Open Review PR
+
+on:
+  schedule:
+    # 10:00 AM IST = 04:30 UTC
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+    inputs:
+      retrieve_mode:
+        description: "Override retrieval scope for this manual run only. Leave as 'use-config' to respect config/sync-config.yml."
+        required: true
+        default: "use-config"
+        type: choice
+        options:
+          - use-config
+          - partial
+          - full
+
+env:
+  SOURCE_ORG_ALIAS: source-org
+  TZ: Asia/Kolkata
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  pull-and-open-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Install Salesforce CLI
+        run: |
+          npm install -g @salesforce/cli
+          sf --version
+
+      - name: Determine retrieval mode and manifest flavor
+        id: mode
+        run: |
+          CONFIG_MODE=$(grep -E '^retrieve_mode:' config/sync-config.yml | awk '{print $2}' | tr -d '"' | tr -d "'" | tr -d '\r')
+          if [ "$CONFIG_MODE" != "full" ] && [ "$CONFIG_MODE" != "partial" ]; then
+            CONFIG_MODE="partial"
+          fi
+          MODE="$CONFIG_MODE"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.retrieve_mode }}" != "use-config" ]; then
+            MODE="${{ github.event.inputs.retrieve_mode }}"
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+          FLAVOR=$(grep -E '^manifest_flavor:' config/sync-config.yml | awk '{print $2}' | tr -d '"' | tr -d "'" | tr -d '\r')
+          if [ "$FLAVOR" != "package" ] && [ "$FLAVOR" != "custom" ]; then
+            FLAVOR="package"
+          fi
+          echo "flavor=$FLAVOR" >> "$GITHUB_OUTPUT"
+
+          echo "Retrieval mode: $MODE | Manifest flavor: $FLAVOR"
+
+      - name: Write source org JWT key
+        run: echo "${{ secrets.SOURCE_SF_JWT_KEY }}" > source_server.key
+
+      - name: Authenticate to source org
+        run: |
+          sf org login jwt \
+            --client-id "${{ secrets.SOURCE_SF_CONSUMER_KEY }}" \
+            --jwt-key-file source_server.key \
+            --username "${{ secrets.SOURCE_SF_USERNAME }}" \
+            --instance-url "${{ secrets.SOURCE_SF_INSTANCE_URL }}" \
+            --alias "$SOURCE_ORG_ALIAS"
+
+      - name: Generate full manifest from source org
+        if: steps.mode.outputs.mode == 'full'
+        run: |
+          sf project generate manifest --from-org "$SOURCE_ORG_ALIAS" --output-dir manifest --name package-full
+          python3 scripts/filter_manifest.py manifest/package-full.xml manifest/excluded-metadata.txt
+          echo "MANIFEST_PATH=manifest/package-full.xml" >> "$GITHUB_ENV"
+
+      - name: Use partial manifest from repo
+        if: steps.mode.outputs.mode == 'partial'
+        run: |
+          if [ "${{ steps.mode.outputs.flavor }}" = "custom" ]; then
+            echo "MANIFEST_PATH=manifest/package-custom.xml" >> "$GITHUB_ENV"
+          else
+            echo "MANIFEST_PATH=manifest/package.xml" >> "$GITHUB_ENV"
+          fi
+
+      - name: Create timestamped pull branch
+        id: pullbranch
+        run: |
+          BRANCH="pull/${{ steps.mode.outputs.mode }}-$(date +'%Y%m%d-%H%M')"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Retrieve metadata from source org
+        run: |
+          sf project retrieve start --manifest "$MANIFEST_PATH" --target-org "$SOURCE_ORG_ALIAS" --ignore-conflicts
+
+      - name: Check for changes
+        id: diffcheck
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit retrieved metadata
+        if: steps.diffcheck.outputs.changed == 'true'
+        run: |
+          git config user.name "sf-sync-bot"
+          git config user.email "sf-sync-bot@users.noreply.github.com"
+          git commit -m "Pull (${{ steps.mode.outputs.mode }}): metadata snapshot from source org $(date +'%Y-%m-%d %H:%M %Z')"
+          git push origin "${{ steps.pullbranch.outputs.branch }}"
+
+      # ---------- OPEN A PR INSTEAD OF AUTO-MERGING ----------
+      - name: Open pull request for team review
+        if: steps.diffcheck.outputs.changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Metadata sync (${{ steps.mode.outputs.mode }}) - ${new Date().toISOString().slice(0,10)}`,
+              head: '${{ steps.pullbranch.outputs.branch }}',
+              base: 'main',
+              body: [
+                `This PR contains a metadata snapshot pulled from the source org.`,
+                ``,
+                `**Retrieval mode:** ${{ steps.mode.outputs.mode }}`,
+                `**Manifest flavor:** ${{ steps.mode.outputs.flavor }}`,
+                `**Pulled at:** ${new Date().toISOString()}`,
+                ``,
+                `Review the diff below. Merging this PR into \`main\` will automatically`,
+                `trigger a deploy of everything in this PR to the target org.`,
+                ``,
+                `If anything here shouldn't go out, either request changes to strip it`,
+                `from this PR, or close this PR without merging.`
+              ].join('\n')
+            });
+            console.log(`Opened PR #${pr.number}: ${pr.html_url}`);
+
+      - name: No changes found
+        if: steps.diffcheck.outputs.changed == 'false'
+        run: echo "No metadata changes detected in source org today (mode: ${{ steps.mode.outputs.mode }}) - nothing to open a PR for."
+
+      - name: Cleanup key file
+        if: always()
+        run: rm -f source_server.key

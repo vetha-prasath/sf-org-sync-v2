@@ -1,0 +1,105 @@
+name: SF Deploy on Merge
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "force-app/**"
+      - "manifest/**"
+
+env:
+  TARGET_ORG_ALIAS: target-org
+
+concurrency:
+  group: sf-deploy-on-merge
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Requires manual approval in the "production" GitHub Environment before
+    # this touches the target org. Configure required reviewers under
+    # Settings -> Environments -> production.
+    environment: production
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # need previous commit to know exactly what changed
+
+      - name: Install Salesforce CLI
+        run: |
+          npm install -g @salesforce/cli
+          sf --version
+
+      - name: Determine manifest to deploy with
+        id: manifest
+        run: |
+          # Same manifest logic as the pull workflow, so deploy scope matches
+          # whatever was used to retrieve the metadata that's now in this PR.
+          CONFIG_MODE=$(grep -E '^retrieve_mode:' config/sync-config.yml | awk '{print $2}' | tr -d '"' | tr -d "'" | tr -d '\r')
+          FLAVOR=$(grep -E '^manifest_flavor:' config/sync-config.yml | awk '{print $2}' | tr -d '"' | tr -d "'" | tr -d '\r')
+
+          if [ "$CONFIG_MODE" = "full" ] && [ -f manifest/package-full.xml ]; then
+            echo "MANIFEST_PATH=manifest/package-full.xml" >> "$GITHUB_ENV"
+          elif [ "$FLAVOR" = "custom" ]; then
+            echo "MANIFEST_PATH=manifest/package-custom.xml" >> "$GITHUB_ENV"
+          else
+            echo "MANIFEST_PATH=manifest/package.xml" >> "$GITHUB_ENV"
+          fi
+          echo "Deploying with: $MANIFEST_PATH"
+
+      - name: Write target org JWT key
+        run: echo "${{ secrets.TARGET_SF_JWT_KEY }}" > target_server.key
+
+      - name: Authenticate to target org
+        run: |
+          sf org login jwt \
+            --client-id "${{ secrets.TARGET_SF_CONSUMER_KEY }}" \
+            --jwt-key-file target_server.key \
+            --username "${{ secrets.TARGET_SF_USERNAME }}" \
+            --instance-url "${{ secrets.TARGET_SF_INSTANCE_URL }}" \
+            --alias "$TARGET_ORG_ALIAS"
+
+      - name: Validate deployment (dry run)
+        run: |
+          sf project deploy validate \
+            --manifest "$MANIFEST_PATH" \
+            --target-org "$TARGET_ORG_ALIAS" \
+            --test-level RunLocalTests \
+            --wait 30
+
+      - name: Deploy metadata to target org
+        run: |
+          sf project deploy start \
+            --manifest "$MANIFEST_PATH" \
+            --target-org "$TARGET_ORG_ALIAS" \
+            --test-level RunLocalTests \
+            --ignore-warnings \
+            --wait 30 \
+            --json | tee deploy-result.json
+
+      - name: Log deploy result
+        run: |
+          git config user.name "sf-sync-bot"
+          git config user.email "sf-sync-bot@users.noreply.github.com"
+          mkdir -p logs
+          mv deploy-result.json "logs/deploy-merge-$(date +'%Y%m%d-%H%M').json"
+          git add logs
+          git commit -m "Deploy: metadata from merged PR pushed to target org $(date +'%Y-%m-%d %H:%M %Z')"
+          git push origin main
+
+      - name: Cleanup key file
+        if: always()
+        run: rm -f target_server.key
+
+      - name: Notify Slack on failure
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"Deploy failed after merge to main - run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"

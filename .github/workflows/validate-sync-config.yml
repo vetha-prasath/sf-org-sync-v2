@@ -1,0 +1,56 @@
+name: Validate Sync Config
+
+on:
+  pull_request:
+    paths:
+      - "config/sync-config.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Validate retrieve_mode and manifest_flavor values
+        run: |
+          MODE=$(grep -E '^retrieve_mode:' config/sync-config.yml | awk '{print $2}' | tr -d '"' | tr -d "'" | tr -d '\r')
+          FLAVOR=$(grep -E '^manifest_flavor:' config/sync-config.yml | awk '{print $2}' | tr -d '"' | tr -d "'" | tr -d '\r')
+
+          if [ -z "$MODE" ]; then
+            echo "::error file=config/sync-config.yml::retrieve_mode is missing or unparseable."
+            exit 1
+          fi
+          if [ "$MODE" != "full" ] && [ "$MODE" != "partial" ]; then
+            echo "::error file=config/sync-config.yml::retrieve_mode must be exactly 'full' or 'partial', got '$MODE'."
+            exit 1
+          fi
+
+          if [ -z "$FLAVOR" ]; then
+            echo "::error file=config/sync-config.yml::manifest_flavor is missing or unparseable."
+            exit 1
+          fi
+          if [ "$FLAVOR" != "package" ] && [ "$FLAVOR" != "custom" ]; then
+            echo "::error file=config/sync-config.yml::manifest_flavor must be exactly 'package' or 'custom', got '$FLAVOR'."
+            exit 1
+          fi
+
+          echo "retrieve_mode is valid: $MODE"
+          echo "manifest_flavor is valid: $FLAVOR"
+
+      - name: Comment on PR with what will change
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const content = fs.readFileSync('config/sync-config.yml', 'utf8');
+            const modeMatch = content.match(/^retrieve_mode:\s*(\w+)/m);
+            const flavorMatch = content.match(/^manifest_flavor:\s*(\w+)/m);
+            const mode = modeMatch ? modeMatch[1] : 'unknown';
+            const flavor = flavorMatch ? flavorMatch[1] : 'unknown';
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `Merging this PR will set retrieve_mode to **${mode}** and manifest_flavor to **${flavor}**. The next scheduled pull (or a manual run using "use-config") will use these values.`
+            });

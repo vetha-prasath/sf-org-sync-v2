@@ -1,0 +1,18 @@
+# Salesforce CLI local files
+.sf/
+.sfdx/
+
+# JWT keys / certs — must NEVER be committed
+certs/*.key
+certs/*.pem
+certs/*.crt
+*.key
+*.pem
+
+# Deploy scratch output (kept only inside logs/ via the workflow, not raw)
+deploy-result.json
+
+# OS/editor noise
+.DS_Store
+.vscode/
+node_modules/

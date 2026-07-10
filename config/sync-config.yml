@@ -1,0 +1,21 @@
+# Controls which manifest the pull workflow uses.
+#
+#   retrieve_mode: partial | full
+#     partial -> uses whichever manifest is selected by manifest_flavor below
+#     full    -> auto-generates a manifest from everything in the source org,
+#                then filters out anything in manifest/excluded-metadata.txt
+#                (manifest_flavor is ignored when this is "full")
+#
+#   manifest_flavor: package | custom
+#     package -> manifest/package.xml            (Payment__c and its fields only)
+#     custom  -> manifest/package-custom.xml     (Payment__c AND Account, plus their fields)
+#
+# To change either value: open a pull request editing this file, get it
+# reviewed and merged into main. The NEXT scheduled pull (or a manual run
+# left on "use-config") will use whatever is on main at run time.
+#
+# Do not add any value other than the ones listed above for each key - the
+# validation workflow will reject the PR otherwise.
+
+retrieve_mode: partial
+manifest_flavor: package
