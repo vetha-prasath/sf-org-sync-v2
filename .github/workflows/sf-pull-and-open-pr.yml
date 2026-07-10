@@ -147,7 +147,8 @@ jobs:
 
       - name: No changes found
         if: steps.diffcheck.outputs.changed == 'false'
-        run: echo "No metadata changes detected in source org today (mode: ${{ steps.mode.outputs.mode }}) - nothing to open a PR for."
+        run: |
+          echo "No metadata changes detected in source org today (mode: ${{ steps.mode.outputs.mode }}) - nothing to open a PR for."
 
       - name: Cleanup key file
         if: always()
