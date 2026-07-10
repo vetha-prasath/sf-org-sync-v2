@@ -1,6 +1,6 @@
 # Require review from the platform/release team for anything that changes
 # sync behavior or scope. Replace @your-org/release-team with real teams/users.
 
-/config/sync-config.yml       @your-org/release-team
-/manifest/                    @your-org/release-team
-/.github/workflows/           @your-org/release-team
+/config/sync-config.yml       vethaprasath.developer@gmail.com
+/manifest/                    vethaprasath.developer@gmail.com
+/.github/workflows/          vethaprasath.developer@gmail.com
